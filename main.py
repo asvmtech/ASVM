@@ -1,5 +1,6 @@
 import os
 import uuid
+import shutil
 import tempfile
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
@@ -8,13 +9,27 @@ import yt_dlp
 
 app = FastAPI(title="YouTube MP3 Streamer API")
 
-def cleanup_file(filepath: str):
-    """Deletes temporary file after sending response."""
-    if os.path.exists(filepath):
-        try:
-            os.remove(filepath)
-        except OSError:
-            pass
+def cleanup_files(*filepaths):
+    """Deletes temporary files after sending response."""
+    for path in filepaths:
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+def get_writable_cookie_file() -> str | None:
+    """
+    Checks for cookies.txt in the repo and copies it to /tmp
+    so yt-dlp has full read/write permissions.
+    """
+    source_cookie = "cookies.txt"
+    if os.path.exists(source_cookie):
+        temp_dir = tempfile.gettempdir()
+        temp_cookie_path = os.path.join(temp_dir, f"session_cookies_{uuid.uuid4().hex[:8]}.txt")
+        shutil.copyfile(source_cookie, temp_cookie_path)
+        return temp_cookie_path
+    return None
 
 @app.get("/")
 def stream_audio(
@@ -29,7 +44,9 @@ def stream_audio(
     output_template = os.path.join(temp_dir, f"{unique_id}.%(ext)s")
     target_mp3 = os.path.join(temp_dir, f"{unique_id}.mp3")
 
-    # Base options
+    # Get a writable copy of cookies if available
+    active_cookie_file = get_writable_cookie_file()
+
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_template,
@@ -43,24 +60,9 @@ def stream_audio(
         'no_warnings': False,
     }
 
-    # Render Secret Files are mounted at /etc/secrets/
-    cookie_candidates = [
-        '/etc/secrets/cookies.txt',
-        'cookies.txt',
-        '/app/cookies.txt'
-    ]
-    cookie_found = False
-    for cp in cookie_candidates:
-        if os.path.exists(cp):
-            ydl_opts['cookiefile'] = cp
-            print(f"[DEBUG] Found cookies file at: {cp}")
-            cookie_found = True
-            break
+    if active_cookie_file:
+        ydl_opts['cookiefile'] = active_cookie_file
 
-    if not cookie_found:
-        print("[WARNING] No cookies.txt found in search paths!")
-
-    # Optional Proxy
     proxy = os.getenv("PROXY_URL")
     if proxy:
         ydl_opts['proxy'] = proxy
@@ -70,14 +72,16 @@ def stream_audio(
             info = ydl.extract_info(url, download=True)
             filename_title = info.get("title", "audio").replace("/", "_")
     except Exception as e:
-        cleanup_file(target_mp3)
+        cleanup_files(target_mp3, active_cookie_file)
         raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
 
     if not os.path.exists(target_mp3):
+        cleanup_files(active_cookie_file)
         raise HTTPException(status_code=500, detail="Audio conversion failed.")
 
+    # Schedule cleanup for both MP3 and temporary cookie instance
     if background_tasks:
-        background_tasks.add_task(cleanup_file, target_mp3)
+        background_tasks.add_task(cleanup_files, target_mp3, active_cookie_file)
 
     return FileResponse(
         path=target_mp3,

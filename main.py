@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse
 from starlette.background import BackgroundTasks
 import yt_dlp
 
-app = FastAPI(title="Audio Streamer API")
+app = FastAPI(title="YouTube MP3 Streamer API")
 
 def cleanup_file(filepath: str):
     """Deletes temporary file after sending response."""
@@ -29,9 +29,16 @@ def stream_audio(
     output_template = os.path.join(temp_dir, f"{unique_id}.%(ext)s")
     target_mp3 = os.path.join(temp_dir, f"{unique_id}.mp3")
 
+    # Base options
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': output_template,
+        # Emulate mobile apps to avoid "Sign in to confirm you're not a bot"
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web']
+            }
+        },
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -40,6 +47,18 @@ def stream_audio(
         'quiet': True,
         'no_warnings': True,
     }
+
+    # Automatically use cookies.txt if present
+    cookie_paths = ['cookies.txt', '/app/cookies.txt']
+    for cp in cookie_paths:
+        if os.path.exists(cp):
+            ydl_opts['cookiefile'] = cp
+            break
+
+    # Use proxy if configured in environment variables
+    proxy = os.getenv("PROXY_URL")
+    if proxy:
+        ydl_opts['proxy'] = proxy
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -52,7 +71,7 @@ def stream_audio(
     if not os.path.exists(target_mp3):
         raise HTTPException(status_code=500, detail="Audio conversion failed.")
 
-    # Schedule file cleanup after the audio is streamed to user
+    # Schedule cleanup after streaming completes
     if background_tasks:
         background_tasks.add_task(cleanup_file, target_mp3)
 

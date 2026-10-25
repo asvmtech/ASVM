@@ -10,7 +10,7 @@ import yt_dlp
 app = FastAPI(title="YouTube MP3 Streamer API")
 
 def cleanup_files(*filepaths):
-    """Deletes temporary files after sending response."""
+    """Deletes temporary files after sending the HTTP response."""
     for path in filepaths:
         if path and os.path.exists(path):
             try:
@@ -20,8 +20,8 @@ def cleanup_files(*filepaths):
 
 def get_writable_cookie_file() -> str | None:
     """
-    Checks for cookies.txt in the repo and copies it to /tmp
-    so yt-dlp has full read/write permissions.
+    Finds cookies.txt in the repo and copies it to /tmp so yt-dlp
+    has write access without throwing read-only filesystem errors.
     """
     source_cookie = "cookies.txt"
     if os.path.exists(source_cookie):
@@ -44,11 +44,11 @@ def stream_audio(
     output_template = os.path.join(temp_dir, f"{unique_id}.%(ext)s")
     target_mp3 = os.path.join(temp_dir, f"{unique_id}.mp3")
 
-    # Get a writable copy of cookies if available
     active_cookie_file = get_writable_cookie_file()
 
     ydl_opts = {
-        'format': 'bestaudio/best',
+        # Fallback to full video+audio stream if standalone audio is unavailable
+        'format': 'bestaudio/bestvideo+bestaudio/best',
         'outtmpl': output_template,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36',
         'postprocessors': [{
@@ -79,7 +79,7 @@ def stream_audio(
         cleanup_files(active_cookie_file)
         raise HTTPException(status_code=500, detail="Audio conversion failed.")
 
-    # Schedule cleanup for both MP3 and temporary cookie instance
+    # Safely delete the temporary MP3 and cookie clone after the file is streamed
     if background_tasks:
         background_tasks.add_task(cleanup_files, target_mp3, active_cookie_file)
 

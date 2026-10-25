@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Advanced M3U8 Video Player</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Plyr CSS CDN -->
+  <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    /* Custom Plyr theme accent */
+    :root {
+      --plyr-color-main: #6366f1; /* Indigo-500 */
+      --plyr-video-background: #090d16;
+    }
+    .plyr {
+      border-radius: 1rem;
+      overflow: hidden;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(0, 0, 0, 0.5);
+    }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col items-center justify-center p-4 selection:bg-indigo-500 selection:text-white">
+
+  <!-- Background decorative glows -->
+  <div class="fixed inset-0 overflow-hidden pointer-events-none z-0">
+    <div class="absolute -top-40 -left-40 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl"></div>
+    <div class="absolute -bottom-40 -right-40 w-96 h-96 bg-purple-600/20 rounded-full blur-3xl"></div>
+  </div>
+
+  <main class="w-full max-w-5xl z-10 space-y-6">
+    <!-- Header -->
+    <header class="flex flex-col sm:flex-row items-center justify-between gap-4 border-b border-slate-800/80 pb-5">
+      <div class="flex items-center gap-3">
+        <div class="p-2.5 bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 rounded-xl shadow-inner">
+          <i data-lucide="play-circle" class="w-7 h-7"></i>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold tracking-tight text-white flex items-center gap-2">
+            M3U8 Stream Player
+            <span class="text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-medium px-2 py-0.5 rounded-full">HLS & Plyr</span>
+          </h1>
+          <p class="text-xs text-slate-400">Stream HLS playlists with adaptive resolution selector</p>
+        </div>
+      </div>
+
+      <!-- Quick status indicator -->
+      <div id="statusBadge" class="hidden items-center gap-2 text-xs px-3 py-1.5 rounded-full bg-slate-900 border border-slate-800 text-slate-400">
+        <span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse" id="statusDot"></span>
+        <span id="statusText">Ready</span>
+      </div>
+    </header>
+
+    <!-- Player Container -->
+    <div class="relative rounded-2xl bg-slate-900/40 p-2 sm:p-3 border border-slate-800/70 backdrop-blur-xl">
+      <div class="relative w-full aspect-video bg-black/60 rounded-xl overflow-hidden flex items-center justify-center">
+        <!-- Plyr target video tag -->
+        <video id="player" class="w-full h-full" playsinline controls crossorigin></video>
+
+        <!-- Placeholder when no URL is loaded -->
+        <div id="emptyNotice" class="absolute inset-0 flex flex-col items-center justify-center text-center p-6 bg-slate-900/90 gap-3 hidden">
+          <i data-lucide="video-off" class="w-12 h-12 text-slate-500"></i>
+          <h3 class="font-semibold text-slate-200">No Stream Loaded</h3>
+          <p class="text-sm text-slate-400 max-w-sm">
+            Provide a stream URL in the query parameter (<code>?url=...</code>) or enter one in the field below.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- URL Input Toolbar -->
+    <section class="bg-slate-900/70 backdrop-blur border border-slate-800 rounded-xl p-4 shadow-xl">
+      <form id="urlForm" class="flex flex-col sm:flex-row items-center gap-3">
+        <div class="relative flex-1 w-full">
+          <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+            <i data-lucide="link" class="w-4 h-4"></i>
+          </div>
+          <input
+            type="url"
+            id="streamUrlInput"
+            placeholder="Paste .m3u8 stream URL here (https://...)"
+            required
+            class="w-full bg-slate-950/80 border border-slate-800 text-slate-200 text-sm rounded-lg pl-10 pr-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-indigo-500/50 focus:border-indigo-500 transition-all placeholder:text-slate-500"
+          />
+        </div>
+        <button
+          type="submit"
+          class="w-full sm:w-auto px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm rounded-lg transition-all duration-200 flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/25 active:scale-95"
+        >
+          <i data-lucide="play" class="w-4 h-4 fill-white"></i>
+          Load Stream
+        </button>
+      </form>
+    </section>
+  </main>
+
+  <!-- Hls.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+  <!-- Plyr JS CDN -->
+  <script src="https://cdn.plyr.io/3.7.8/plyr.polyfilled.js"></script>
+
+  <script>
+    lucide.createIcons();
+
+    const videoElement = document.getElementById('player');
+    const urlForm = document.getElementById('urlForm');
+    const streamUrlInput = document.getElementById('streamUrlInput');
+    const emptyNotice = document.getElementById('emptyNotice');
+    const statusBadge = document.getElementById('statusBadge');
+    const statusText = document.getElementById('statusText');
+    const statusDot = document.getElementById('statusDot');
+
+    let hlsInstance = null;
+    let plyrInstance = null;
+
+    // Helper: update status badge
+    function setStatus(text, colorClass = 'bg-amber-400') {
+      statusBadge.classList.remove('hidden');
+      statusBadge.classList.add('flex');
+      statusText.innerText = text;
+      statusDot.className = `w-2 h-2 rounded-full ${colorClass}`;
+    }
+
+    // Function to load and play HLS stream
+    function loadHlsStream(streamUrl) {
+      if (!streamUrl) {
+        emptyNotice.classList.remove('hidden');
+        return;
+      }
+      emptyNotice.classList.add('hidden');
+      setStatus('Loading...', 'bg-amber-400 animate-pulse');
+
+      // Sync input box value
+      streamUrlInput.value = streamUrl;
+
+      // Clean up previous HLS instance
+      if (hlsInstance) {
+        hlsInstance.destroy();
+        hlsInstance = null;
+      }
+
+      // Check if Hls.js is supported
+      if (Hls.isSupported()) {
+        hlsInstance = new Hls({
+          capLevelToPlayerSize: true, // Auto quality selection optimization
+          autoStartLoad: true
+        });
+
+        hlsInstance.loadSource(streamUrl);
+        hlsInstance.attachMedia(videoElement);
+
+        hlsInstance.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+          setStatus('Ready to play', 'bg-emerald-400');
+
+          // Extract available quality levels
+          const availableQualities = hlsInstance.levels.map((l) => l.height);
+          // Insert 0 to represent 'Auto'
+          availableQualities.unshift(0);
+
+          // Configure / reconfigure Plyr controls with qualities
+          initPlyr(availableQualities);
+        });
+
+        hlsInstance.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            console.error('HLS error:', data);
+            setStatus('Stream Error', 'bg-rose-500');
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                hlsInstance.startLoad();
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hlsInstance.recoverMediaError();
+                break;
+              default:
+                hlsInstance.destroy();
+                break;
+            }
+          }
+        });
+      } 
+      // Fallback for native Safari HLS support
+      else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
+        videoElement.src = streamUrl;
+        initPlyr([]);
+        setStatus('Native HLS Ready', 'bg-emerald-400');
+      } else {
+        alert('HLS playback is not supported on this browser.');
+        setStatus('Unsupported', 'bg-rose-500');
+      }
+    }
+
+    // Initialize or refresh Plyr
+    function initPlyr(availableQualities = []) {
+      const defaultOptions = {
+        controls: [
+          'play-large',
+          'play',
+          'progress',
+          'current-time',
+          'duration',
+          'mute',
+          'volume',
+          'captions',
+          'settings',
+          'pip',
+          'airplay',
+          'fullscreen'
+        ],
+        settings: ['quality', 'speed'],
+        speed: { selected: 1, options: [0.5, 0.75, 1, 1.25, 1.5, 2] },
+        quality: {
+          default: 0,
+          options: availableQualities,
+          forced: true,
+          onChange: (newQuality) => {
+            if (!hlsInstance) return;
+            if (newQuality === 0) {
+              hlsInstance.currentLevel = -1; // Auto
+            } else {
+              hlsInstance.levels.forEach((level, levelIndex) => {
+                if (level.height === newQuality) {
+                  hlsInstance.currentLevel = levelIndex;
+                }
+              });
+            }
+          }
+        },
+        i18n: {
+          qualityLabel: {
+            0: 'Auto'
+          }
+        }
+      };
+
+      if (!plyrInstance) {
+        plyrInstance = new Plyr(videoElement, defaultOptions);
+      } else if (availableQualities.length > 0) {
+        // Update quality options dynamically
+        plyrInstance.options.quality = defaultOptions.quality;
+      }
+    }
+
+    // Parse URL parameter: domain?url=...
+    function getQueryParam(param) {
+      const urlParams = new URLSearchParams(window.location.search);
+      return urlParams.get(param);
+    }
+
+    // Form submission handler
+    urlForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const newUrl = streamUrlInput.value.trim();
+      if (!newUrl) return;
+
+      // Update browser URL without reloading
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.set('url', newUrl);
+      window.history.pushState({}, '', currentUrl);
+
+      loadHlsStream(newUrl);
+    });
+
+    // On page load
+    window.addEventListener('DOMContentLoaded', () => {
+      const streamUrl = getQueryParam('url');
+      if (streamUrl) {
+        loadHlsStream(streamUrl);
+      } else {
+        // Init empty plyr frame
+        initPlyr([]);
+        emptyNotice.classList.remove('hidden');
+      }
+    });
+  </script>
+</body>
+</html>

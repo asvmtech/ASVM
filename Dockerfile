@@ -12,7 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Expose port (Render automatically maps the PORT environment variable)
 ENV PORT=10000
 EXPOSE 10000
 
